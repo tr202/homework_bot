@@ -1,23 +1,24 @@
 """Проверяет статус домашней работы."""
-
+import json
 import logging
 import os
 import sys
 import time
+from datetime import datetime
+from http import HTTPStatus
 
 import requests
-
-from dotenv import load_dotenv
 import telegram
+from dotenv import load_dotenv
 
 from exceptions import UnexpectedStatus
-
 
 load_dotenv()
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+BOT = os.getenv('BOT')
 
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
@@ -49,7 +50,7 @@ handler = logging.StreamHandler(sys.stdout)
 logger.addHandler(handler)
 
 
-def send_once(key, value, set):
+def send_once(key, value='No errors', set=False):
     """Проверяет что сообщение об ошибке уже отправлено."""
     if set:
         if (os.environ.get(f'{key}') != value):
@@ -84,21 +85,38 @@ def send_message(bot, message):
         logger.error(f'Не удалось отправить сообщение {message}')
 
 
+def check_json(response):
+    """Проверяет формат Json."""
+    try:
+        if __name__ == '__main__':
+            json.loads(response)
+        send_once('json_error')
+    except json.JSONDecodeError as error:
+        if send_once('json_error', str(error), True):
+            this_bot.get('bot')('Неверный формат Json')
+        logger.error('Неверный формат Json')
+
+
 def get_api_answer(timestamp):
     """Запрашивает API практикум."""
     try:
-        homework_statuses = requests.get(
+        response = requests.get(
             ENDPOINT,
             headers=HEADERS,
             params={'from_date': timestamp}
         )
-        status_code = homework_statuses.status_code
-        if status_code != 200:
+        status_code = response.status_code
+        if status_code != HTTPStatus.OK:
             this_bot.get('bot')(f'Код ответа API {status_code}')
             raise Exception
         else:
-            send_once('request_error', 'No errors', False)
-            return homework_statuses.json()
+            send_once('request_error')
+
+            json_data = response.json()
+            check_json(response.text)
+            if isinstance(json_data, dict):
+                if isinstance(json_data['homeworks'], list):
+                    return json_data
     except requests.RequestException as request_error:
         if send_once('request_error', request_error, True):
             this_bot.get('bot')('Ошибка ответа сервера API практикум')
@@ -143,10 +161,31 @@ def parse_status(homework):
     return
 
 
+def check_bot(bot):
+    """Проверяет что бот запустился."""
+    if str(bot) == BOT:
+        return True
+    else:
+        raise Exception
+
+
+def check_timestamp(timestamp):
+    """Проверяет формат даты для запроса данных API."""
+    if isinstance(timestamp, int) and datetime.fromtimestamp(timestamp):
+        send_once('date_error')
+        return
+    if send_once('date_error', 'Неверный формат даты', True):
+        this_bot.get('bot')('Неверный формат даты')
+        logger.error('Неверный формат даты')
+    return True
+
+
 def main():
     """Основная логика работы бота."""
     check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    if __name__ == '__main__':
+        check_bot(bot)
 
     def my_bot(message):
         bot.send_message(TELEGRAM_CHAT_ID, message)
@@ -158,17 +197,20 @@ def main():
             api_answer = get_api_answer(timestamp - 7000000)
             check_response(api_answer)
             timestamp = api_answer.get('current_date')
+            if check_timestamp(timestamp):
+                continue
             homeworks = api_answer.get('homeworks')
             if len(homeworks) > 0:
                 status_message = parse_status(homeworks[0])
                 if status_message:
                     send_message(bot, status_message)
-            time.sleep(RETRY_PERIOD)
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             send_message(bot, message)
             logger.error(message)
             raise error
+        finally:
+            time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
