@@ -1,7 +1,7 @@
 # homework_bot
 python telegram bot
 ### Технологии
-Python 3.9
+Python 3.9 TelegramAPI
 ### Запуск проекта в dev-режиме
 - Установите и активируйте виртуальное окружение
 - Установите зависимости из файла requirements.txt
